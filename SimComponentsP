@@ -1,0 +1,83 @@
+import simpy
+
+class Packet(object):
+    def __init__(self, time, size, id, src="a", dst="z", flow_id=0):
+        self.time = time
+        self.size = size
+        self.id = id
+        self.src = src
+        self.dst = dst
+        self.flow_id = flow_id
+
+    def __lt__(self, other):
+            return self.flow_id < other.flow_id
+
+    def __repr__(self):
+        return "id: {}, src: {}, time: {}, size: {}, flow_id: {}".\
+            format(self.id, self.src, self.time, self.size, self.flow_id)
+
+
+class PacketGenerator(object):
+    def __init__(self, env, id,  adist, sdist, finish=float("inf"), flow_id=0):
+        self.id = id
+        self.env = env
+        self.adist = adist
+        self.sdist = sdist
+        self.finish = finish
+        self.out = None
+        self.packets_sent = 0
+        self.action = env.process(self.run())
+        self.flow_id = flow_id
+
+    def run(self):
+        while self.env.now < self.finish:
+            yield self.env.timeout(self.adist())
+            self.packets_sent += 1
+            p = Packet(self.env.now, self.sdist(), self.packets_sent, src=self.id, flow_id=self.flow_id)
+            self.out.put(p)
+
+
+class PacketSink(object):
+    def __init__(self, env, rec_waits=True, selector=None):
+        self.store = simpy.Store(env)
+        self.env = env
+        self.rec_waits = rec_waits
+        self.waits = []
+        self.packets_rec = 0
+        self.bytes_rec = 0
+        self.selector = selector
+        self.last_arrival = 0.0
+        self.waits_flow1 = []
+        self.waits_flow2 = []
+        self.waits_flow3 = []
+
+    def put(self, pkt):
+        if not self.selector or self.selector(pkt):
+            if self.rec_waits:
+                self.waits.append(self.env.now - pkt.time)
+            if pkt.flow_id == 1:
+                self.waits_flow1.append(self.env.now - pkt.time)
+            if pkt.flow_id == 2:
+                self.waits_flow2.append(self.env.now - pkt.time)
+            if pkt.flow_id == 3:
+                self.waits_flow3.append(self.env.now - pkt.time)
+
+class SwitchPort(object):
+    def __init__(self, env, rate, qlimit=None):
+        self.store = simpy.PriorityStore(env)
+        self.rate = rate
+        self.env = env
+        self.out = None
+        self.packets_rec = 0
+        self.qlimit = qlimit
+        self.action = env.process(self.run())
+        self.queue = []
+
+    def run(self):
+        while True:
+            msg = (yield self.store.get())
+            yield self.env.timeout(msg.size*8.0/self.rate)
+            self.out.put(msg)
+
+    def put(self, pkt):
+        return self.store.put(pkt)
